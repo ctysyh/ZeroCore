@@ -52,7 +52,6 @@ extern "C" {
 
 typedef uint32_t zc_writer_id_t;
 typedef uint64_t zc_reader_id_t;
-typedef uint32_t zc_token_t;
 typedef uint64_t zc_time_t;
 
 /* 不透明句柄，用户不可直接访问内部 */
@@ -136,7 +135,6 @@ typedef struct {
 
 typedef struct {
     const char*     name;              // 必填，调试用（如 "AudioWriter_1"）
-    zc_token_t      token;             // Writer: 数据流标识；Reader: token 掩码（bit N=1 表示关注流N）
     uint64_t        expected_rate_bps; // 预期速率（字节/秒），0=未知（用于背压/预分配）
     uint64_t        thread_id;         // 系统线程ID（用于CPU亲和性绑定）
 } zc_thread_config_t;
@@ -482,14 +480,6 @@ ZC_API void* zc_block_data(
  * @return 大小（字节）
  */
 ZC_API size_t zc_block_size(
-    zc_block_handle_t* handle);
-
-/**
- * @brief 获取写入者Token
- * @param handle 块句柄
- * @return token
- */
-ZC_API zc_token_t zc_block_token(
     zc_block_handle_t* handle);
 
 /**
