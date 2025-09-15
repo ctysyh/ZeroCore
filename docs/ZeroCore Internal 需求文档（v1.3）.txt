@@ -1,0 +1,308 @@
+# ZeroCore Internal 需求文档（v1.3）
+
+---
+
+## 一、共享结构
+
+### 1.1 内存池结构
+
+```c
+typedef struct {
+    atomic_uintptr_t pool; // 池本体
+    zc_stats_t stats;    // 全局统计
+      // 注册列表
+      // 内部线程
+} zc_memory_pool_t;
+```
+
+- **分配方式**：初始化时池本体 lazy_alloc 直到有第一个写入者注册，运行时可以动态扩缩容。
+- **对齐要求**：`base_addr` 与 `total_size` 均对齐至 512 B（缓存行与块大小公约数）。
+- **生命周期**：`zc_init()` 创建，`zc_destroy()` 归还给 OS，中间永不移动。
+
+### 1.2 内存块布局（固定 512 B 倍数）
+
+| 区域 | 大小 | 说明 |
+|------|------|------|
+| Header | 64 B | 含状态、ID、引用位图、时间戳 |
+| UserData | 用户请求长度 | 返回给用户的指针即此区域首地址 |
+| Trailer | 24 B | 守卫结构（canary + done + checksum） |
+| Padding | 0 ~ 424 B | 使总和为 512 B 的倍数 |
+
+> **可见性约定**：
+> Header 与 Trailer 仅由内部读写，外部不触碰。
+
+### 1.3 块状态机（单字节原子）
+
+| 状态值 | 名称 | 含义 |
+|--------|------|------|
+| 0 | FREE | 空闲可分配或正在被争夺 |
+| 1 | USING | 写入者已提交，读取者可消费 |
+| 2 | CLEAN | 正在清理或合并 |
+| 3 | CORRUPT | 守卫检测到越界写，等待回收 |
+
+**合法转换**（只有以下 6 种）：
+
+1. FREE → USING：写入者成功获取（写者优先，CAS 状态即可）。
+2. FREE → CLEAN：清理者开始合并相邻 FREE 块。
+3. USING → CLEAN：清理者确认 reader_visited 中（除了异常者或者自主退出者之外）所有需要读取的读取者对应位为 1 且所有引用位图为 0
+4. USING → CORRUPT：守卫线程发现 canary 被篡改。
+5. CLEAN → FREE：清理者完成合并，把长度累加到前驱块。
+6. CORRUPT → CLEAN：清理者开始回收损坏块。
+
+---
+
+## 二、写入者及其守卫
+
+### 2.1 写入者注册
+
+```c
+zc_result_t zc_writer_register(const zc_thread_config_t* conf,
+                               zc_writer_id_t* out_id);
+```
+
+- ID 分配：静态数组索引 0~31，先到先得。  
+- 伴随动作：  
+  - 创建 `zc_writer_workspace_t`，与 CPU 缓存行对齐。  
+  - 创建守卫线程（见 2.4），置于 `WAIT_TASK` 状态。
+
+### 2.2 获取块（写者优先路径）
+
+```c
+zc_result_t zc_writer_acquire_block(zc_writer_id_t wid,
+                                    size_t size,
+                                    zc_block_handle_t* out_handle,
+                                    uint64_t timeout_ns);
+```
+
+**内部流程**：
+
+1. 按策略挑候选块（先 cached_offset 的后向邻接块 → 再 guide 地址 → 全局遍历）。
+2. **挑选逻辑**：
+   - 检查 `state == FREE && 无任意引用位被置 1`。
+   - 检查块的可用大小不小于参数中要求的 size。
+   - 原子置 `writer_ref[wid] = true`。
+   - CAS `state FREE→FREE` 防止与清理者的竞态。
+   - 检查 `writer_ref 中比自己靠前的位全 false`。
+   - 成功则确认获取当前块。
+   - 更新 cached_offset 并将旧 cached_offset 指向的 header 中的 `writer_ref[wid] 原子置为 false`。
+   - 填写时间戳（调用 `zc_timestamp()`）并返回 UserData 指针。
+3. **失败处理**：
+   - 立即放弃，寻找其他块。
+4. 超时机制：每次检查块后检查耗时，硬截止 `timeout_ns`，到点返回 `ZC_ERROR_TIMEOUT`。
+
+> 保证：低 ID 优先 + 不主动抢占已持有块 + 无忙等。
+
+### 2.3 提交与取消
+
+```c
+zc_result_t zc_writer_commit_block(zc_block_handle_t* h);
+```
+
+- 填写时间戳（调用 `zc_timestamp()`）。
+- 原子置 `state = USING`。
+- （可选）通过清理者转发消息给配套读取者告知写入情况。
+
+```c
+zc_result_t zc_writer_cancel_block(zc_block_handle_t* h);
+```
+
+- 仅清除 `writer_ref[wid]` 与 `state`（保持 FREE）。  
+- 不修改 UserData，不做合并。
+
+### 2.4 块尾守卫（越界写监测）
+
+- **触发时机**：`acquire` 成功即绑定守卫线程。  
+- **数据结构**（Trailer 内）：
+
+```c
+typedef volatile struct {
+    uint64_t canary;   // 随机魔数
+    uint64_t done;     // 0=停止监测
+    uint64_t checksum; // 可选 CRC
+} zc_block_tail_t;
+```
+
+- **守卫线程主循环**：
+
+```
+while (!done) {
+    snapshot = canary;
+    cpu_relax();
+    if (canary != snapshot) {
+        zc_guard_stop_writer();   // 把用户 handle 篡改为 poison 地址
+        zc_guard_report();        // 改状态为 CORRUPT + MessageRing 报警
+        break;
+    }
+    exp_backoff();
+}
+```
+
+- **阻断实现**：  
+  在 `acquire` 时把返回指针地址写入 `guard_task->user_handle`；触发时将 `*user_handle` 改为 `NULL` 或 `PROT_NONE` 页地址，使用户后续写入立即 SEGV，实现“纯软件立即阻断”。
+
+---
+
+## 三、读取者
+
+### 3.1 注册与 ID 规则
+
+```c
+zc_result_t zc_reader_register(zc_writer_t target_writer,
+                               zc_reader_id_t* out_id);
+```
+
+- ID 高 32 位 = `writer_id`，低 32 位 = 自增序号 → 至多 32 读者/写入者。  
+- 工作空间与写入者类似，但无守卫线程。
+
+### 3.2 轮询块（尽力 FIFO）
+
+```c
+zc_result_t zc_reader_poll_block(zc_reader_id_t rid,
+                                 size_t hint_size,
+                                 zc_block_handle_t* out,
+                                 uint64_t timeout_ns);
+```
+
+**步骤**：
+
+1. 从 `cached_offset` 开始向后线性扫描。  
+2. 匹配条件：  
+   - `state == USING`  
+   - `writer_id` 与注册目标一致  
+   - `reader_visited[reader_idx] == false`  
+3. 置 `reader_ref[idx] = true` 与 `reader_visited[idx] = true`（acq_rel）。  
+4. 返回 UserData 指针并更新 `cached_offset`。  
+5. 若遇到 `LastJumpDest` 非 0，优先检查该跳跃目标，保证“跳跃链”尽量 FIFO。  
+6. 超时机制同写入者。
+
+### 3.3 释放引用
+
+```c
+zc_result_t zc_reader_release_block(zc_block_handle_t* h);
+```
+
+- 清 `reader_ref[idx]`（relaxed）。  
+- 不清 `reader_visited`，供清理者判断“已读”。
+
+---
+
+## 四、清理者及其内部协作
+
+### 4.1 角色与生命周期
+
+- 默认至少 1 个清理者，可动态增至 `cleaner_max_count`。  
+- 新增/退出由“当值者”根据负载率投票决定（见 4.4）。  
+- 每个清理者拥有独立 `zc_cleaner_context_t`，共享 `zc_cleaner_workspace_t`。
+
+### 4.2 单清理者主循环（无锁遍历）
+
+```
+for (offset = 0; offset < pool_size; offset += stride) {
+    header = pool_base + offset;
+    switch (header->state) {
+    case USING:
+        if (all_readers_visited() && no_refs())
+            header->state = CLEAN;
+        else if (stale_threshold())
+            send_missing_msg();
+        break;
+    case FREE:
+        try_merge_forward();
+        break;
+    case CORRUPT:
+        header->state = CLEAN; // 直接回收
+        break;
+    }
+    if (连续 CLEAN 段)
+        合并长度到首块，首块 state = FREE；
+}
+```
+
+- **步进 stride**：`stride = max(512, pool_size / (cleaner_count * 4))`，保证多清理者等距分布。  
+- **合并算法**：CAS 把后一块标 CLEAN，再原子累加 `data_size`，最后把前一块标 FREE。
+
+### 4.3 MessageRing 内部消息
+
+- **环线结构**：双向链表节点，每节点 = 一个清理者。  
+- **消息类型**（节选）：
+
+| 消息码 | 含义 |
+|--------|------|
+| MSG_HEARTBEAT | 周期性上报负载 |
+| MSG_OWNER_TRANSFER | 当值者移交令牌 |
+| MSG_MERGE_REQ | 请求邻居暂停并协助合并 |
+| MSG_SCALE_UP / DOWN | 投票增/减清理者 |
+
+- **传递方式**：  
+  - 常规：单向单包，指针沿环转发，命中 dst 即处理。  
+  - 关键：双向双包，确保至少一个方向送达。  
+- **当值者选举**：首个发送的包带 `ownership_token=1`，收到者即为当值；超时未心跳则由守护者线程随机指定新当值者并广播。
+
+### 4.4 动态伸缩策略（由当值者执行）
+
+```c
+bool should_scale_up(zc_stats_t* s, int cur) {
+    return s->used_bytes * 100 / s->total_bytes > 85 &&
+           cur < max_cleaners;
+}
+bool should_scale_down(zc_stats_t* s, int cur) {
+    return s->used_bytes * 100 / s->total_bytes < 40 &&
+           cur > 1;
+}
+```
+
+- 当值者汇总所有心跳后，满足条件则广播 `MSG_SCALE_UP`；收到多数 `ACK` 后调用 `zc_internal_spawn_cleaner_thread()`。  
+- 缩容时选择 ID 最大者发送 `MSG_SHUTDOWN`，目标清理者完成当前 stride 后退出。
+
+---
+
+## 五、整体补充内容
+
+### 5.1 注册表与热更新
+
+```c
+typedef struct {
+    zc_writer_registry_t   writers[ZC_MAX_WRITERS];
+    zc_reader_registry_t   readers[ZC_MAX_WRITERS * ZC_MAX_READERS_PER];
+    zc_cleaner_context_t   cleaners[ZC_MAX_CLEANERS];
+    atomic_flag            lock; // 仅用于注册/注销临界区
+} zc_registry_t;
+```
+
+- **读写分离**：注册/注销需拿 `lock`；查询（遍历时）无锁，读端使用 `atomic_load(&count)` 快照。  
+- **故障清理**：看门狗线程每 100 ms 检查心跳，超时即强制清 `writer_ref` / `reader_ref` 并回收块。
+
+### 5.2 性能与可移植要求
+
+- **延迟**：单线程 `acquire` + `commit` 路径 < 100 ns（x86-64, 3.2 GHz）。  
+- **吞吐**：> 1 M op/s（32 写者 × 32 读者，块 4 KB）。  
+- **跨平台**：  
+  - 原子操作：C11 `stdatomic.h` 封装在 `zc_platform.h`。  
+  - 内存序：状态变更用 `acq_rel`，统计计数用 `relaxed`。  
+- **NUMA 友好**：  
+  - 内存池绑定到首个使用线程所在节点；  
+  - 提供 `zc_bind_thread(cpu_id)` 供外部调用。
+
+### 5.3 测试用例（需覆盖）
+
+| 编号 | 场景 | 验收标准 |
+|------|------|----------|
+| TC-STATE-1 | 所有状态转换 | Helgrind 无竞态 |
+| TC-PRIORITY-2 | 多写者竞争同一块 | 低 ID 永远获胜 |
+| TC-GUARD-3 | 故意越界写 | 1 μs 内触发 SIGSEGV，块标 CORRUPT |
+| TC-RING-4 | 清理者缩容 | 总 CPU 占用下降 30 % |
+| TC-FIFO-5 | 写入者连续跳跃 | 读者失序率 < 0.1 % |
+
+---
+
+## 六、结论
+
+本文档给出 ZeroCore v1.3 的**完整内部实现需求**，涵盖：
+
+1. 共享内存布局与无锁状态机；  
+2. 写者优先的分配与守卫阻断机制；  
+3. 读者尽力 FIFO 的遍历策略；  
+4. 清理者基于 MessageRing 的协作与动态伸缩；  
+5. 注册表、心跳、性能、跨平台、测试等配套要求。
+
+**下一步**：依照章节顺序，先实现 `zc_memory_pool_t` 与状态机，再实现写入者快速路径与守卫，再实现读者遍历，最后实现清理者与 MessageRing，即可交付可运行内核。
