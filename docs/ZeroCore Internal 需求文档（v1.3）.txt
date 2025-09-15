@@ -8,8 +8,9 @@
 
 ```c
 typedef struct {
+    char* name;            // 名称
     atomic_uintptr_t pool; // 池本体
-    zc_stats_t stats;    // 全局统计
+    zc_stats_t stats;      // 全局统计
       // 注册列表
       // 内部线程
 } zc_memory_pool_t;
@@ -19,7 +20,7 @@ typedef struct {
 - **对齐要求**：`base_addr` 与 `total_size` 均对齐至 512 B（缓存行与块大小公约数）。
 - **生命周期**：`zc_init()` 创建，`zc_destroy()` 归还给 OS，中间永不移动。
 
-### 1.2 内存块布局（固定 512 B 倍数）
+### 1.2 内存块布局
 
 | 区域 | 大小 | 说明 |
 |------|------|------|
@@ -27,6 +28,29 @@ typedef struct {
 | UserData | 用户请求长度 | 返回给用户的指针即此区域首地址 |
 | Trailer | 24 B | 守卫结构（canary + done + checksum） |
 | Padding | 0 ~ 424 B | 使总和为 512 B 的倍数 |
+
+- Header
+```c
+typedef struct zc_block_header {
+    _Atomic uint16_t  state;           // FREE=0, USING=1, CLEAN=2, CORRUPT=3
+    uint16_t          reserved_flags;  // 未来扩展位
+    uint32_t          writer_id;       // 写入者ID
+    uint64_t          data_size;       // 用户数据大小（单位：字节）
+    zc_time_t         timestamp;       // 写入时间戳
+
+    // === 并行引用位图===
+    _Atomic bool      writer_ref[ZC_MAX_WRITERS];         // 写入者实时引用
+    _Atomic bool      reader_ref[ZC_MAX_READERS_PER];     // 读取者实时引用
+    _Atomic bool      reader_visited[ZC_MAX_READERS_PER]; // 读取者访问历史
+} zc_block_header_t;
+```
+
+- Trailer
+typedef volatile zc_block_trailer struct {
+    uint64_t  canary;      // 守卫量：初始值为魔数，被篡改即触发报警
+    uint64_t  done;        // 停车标志：非0=运行中，0=停止监测
+    uint64_t  checksum;    // 可选CRC（默认0，启用时计算）
+} zc_block_trailer_t;
 
 > **可见性约定**：
 > Header 与 Trailer 仅由内部读写，外部不触碰。
@@ -48,6 +72,12 @@ typedef struct {
 4. USING → CORRUPT：守卫线程发现 canary 被篡改。
 5. CLEAN → FREE：清理者完成合并，把长度累加到前驱块。
 6. CORRUPT → CLEAN：清理者开始回收损坏块。
+
+### 1.4 注册表
+（TODO）
+
+### 1.5 系统线程简述
+（TODO）
 
 ---
 
@@ -79,12 +109,14 @@ zc_result_t zc_writer_acquire_block(zc_writer_id_t wid,
 1. 按策略挑候选块（先 cached_offset 的后向邻接块 → 再 guide 地址 → 全局遍历）。
 2. **挑选逻辑**：
    - 检查 `state == FREE && 无任意引用位被置 1`。
-   - 检查块的可用大小不小于参数中要求的 size。
+   - 检查块的可用大小不小于参数中要求的 size + 24 B。
    - 原子置 `writer_ref[wid] = true`。
    - CAS `state FREE→FREE` 防止与清理者的竞态。
    - 检查 `writer_ref 中比自己靠前的位全 false`。
    - 成功则确认获取当前块。
    - 更新 cached_offset 并将旧 cached_offset 指向的 header 中的 `writer_ref[wid] 原子置为 false`。
+   - 判断当前块的可用大小减去自己要求的 size 之后剩余量是否大于 512 B，如果是则需要将剩余部分新增 header 标记可用块。
+   - 更新信号量唤醒守卫（`zc_guard_on_attach()`）。
    - 填写时间戳（调用 `zc_timestamp()`）并返回 UserData 指针。
 3. **失败处理**：
    - 立即放弃，寻找其他块。
@@ -95,50 +127,88 @@ zc_result_t zc_writer_acquire_block(zc_writer_id_t wid,
 ### 2.3 提交与取消
 
 ```c
-zc_result_t zc_writer_commit_block(zc_block_handle_t* h);
+zc_result_t zc_writer_commit_block(zc_writer_id_t wid);
 ```
 
 - 填写时间戳（调用 `zc_timestamp()`）。
 - 原子置 `state = USING`。
-- （可选）通过清理者转发消息给配套读取者告知写入情况。
+- 对内存块不再可写，通知守卫将 `user_handle` 更改为 `UAF 错误地址（通过宏或者全局共享变量定义）` 然后重新休眠。
 
 ```c
-zc_result_t zc_writer_cancel_block(zc_block_handle_t* h);
+zc_result_t zc_writer_cancel_block(zc_writer_id_t wid);
 ```
 
-- 仅清除 `writer_ref[wid]` 与 `state`（保持 FREE）。  
-- 不修改 UserData，不做合并。
+- 仅填写时间戳（调用 `zc_timestamp()`）并触发守卫清理逻辑（同上）。
+- 忽略可能更改的 UserData。
 
 ### 2.4 块尾守卫（越界写监测）
 
-- **触发时机**：`acquire` 成功即绑定守卫线程。  
-- **数据结构**（Trailer 内）：
+- **初始化**：`register` 时配套创建并阻塞在信号量上。
+- **触发时机**：`acquire` 时调用 `zc_guard_on_attach()` 唤醒守卫线程。  
+- **数据结构**：
 
 ```c
-typedef volatile struct {
-    uint64_t canary;   // 随机魔数
-    uint64_t done;     // 0=停止监测
-    uint64_t checksum; // 可选 CRC
-} zc_block_tail_t;
+typedef zc_guard_task struct {
+    zc_block_tail_t*   tail;        // 监测目标
+    _Atomic int32_t    state;       // 守卫状态
+    zc_writer_id_t     writer_id;   // 所属写入者ID
+    pthread_cond_t     go;          // 启动条件变量
+    uint64_t           canary;      // 随机的守卫魔数变量
+    void**             user_handle; // 用户handle指针缓存
+    zc_memory_pool_t*  mp;          // 所属内存池
+} zc_guard_task_t;
 ```
 
-- **守卫线程主循环**：
+- 守卫线程唤醒初始化
 
-```
-while (!done) {
-    snapshot = canary;
-    cpu_relax();
-    if (canary != snapshot) {
-        zc_guard_stop_writer();   // 把用户 handle 篡改为 poison 地址
-        zc_guard_report();        // 改状态为 CORRUPT + MessageRing 报警
-        break;
-    }
-    exp_backoff();
+```c
+void zc_guard_on_attach()
+{
+    // 更新自己的 zc_guard_task_t，其中 canary 更新为一个新的随机数
+
+    // 初始化块末守卫段
+
+    zc_guard_on_detect();
 }
 ```
 
-- **阻断实现**：  
-  在 `acquire` 时把返回指针地址写入 `guard_task->user_handle`；触发时将 `*user_handle` 改为 `NULL` 或 `PROT_NONE` 页地址，使用户后续写入立即 SEGV，实现“纯软件立即阻断”。
+- 守卫线程检测循环：
+
+```c
+void zc_guard_on_detect(zc_guard_task_t* t)
+{
+    /* 1. 局部变量初始化 */
+    uint32_t exp  = 1; // 指数退避初始空转次数
+    zc_block_tail_t* tail = t->tail;
+    uint64_t right_magic = t->canary;
+
+    while (likely(!tail->done))
+    {
+        /* 2. 热路径：单次 load + 比较 */
+        uint64_t curr = tail->canary;
+        if (unlikely(curr != right_magic))
+        {
+            /* 3. 异常处理 */
+            zc_guard_stop_writer(t); // 阻断写入者
+            zc_guard_report(t); // 报告
+            break;
+        }
+
+        /* 4. 指数退避 + PAUSE */
+        for (uint32_t i = 0; i < exp; ++i)
+            cpu_relax();
+        exp = MIN(exp * 2, 256);
+    }
+    return;
+}
+
+```
+
+- 写入者阻断实现：  
+  - `zc_guard_stop_writer()` 触发时将 `user_handle` 改为 `BOF 错误地址（通过宏或者全局共享变量定义）`，实现“纯软件立即阻断”。
+
+- 异常报告处理：
+  - 修改块 header 的为 CORRUPT
 
 ---
 
