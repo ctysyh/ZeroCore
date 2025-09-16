@@ -54,6 +54,7 @@ extern "C" {
 typedef uint32_t zc_writer_id_t;
 typedef uint64_t zc_reader_id_t;
 typedef uint64_t zc_time_t;
+typedef uint32_t zc_short_time_t;
 
 /* 不透明句柄，用户不可直接访问内部 */
 typedef struct zc_block_handle zc_block_handle_t;
@@ -149,7 +150,8 @@ typedef struct zc_backpressure_strategy zc_backpressure_strategy_t;
  * @note 线程安全，所有清理者线程自动继承
  */
 ZC_API zc_result_t zc_set_clean_strategy(
-    zc_clean_strategy_t* strategy);
+    zc_clean_strategy_t* strategy
+);
 
 /**
  * @brief 设置分配策略
@@ -157,7 +159,8 @@ ZC_API zc_result_t zc_set_clean_strategy(
  * @return 是否成功
  */
 ZC_API zc_result_t zc_set_alloc_strategy(
-    zc_alloc_strategy_t* strategy);
+    zc_alloc_strategy_t* strategy
+);
 
 /**
  * @brief 设置背压策略
@@ -165,7 +168,8 @@ ZC_API zc_result_t zc_set_alloc_strategy(
  * @return 是否成功
  */
 ZC_API zc_result_t zc_set_backpressure_strategy(
-    zc_backpressure_strategy_t* strategy);
+    zc_backpressure_strategy_t* strategy
+);
 
 struct zc_clean_strategy {
     const char* name;
@@ -202,7 +206,8 @@ struct zc_backpressure_strategy {
  * @return ZC_OK 或错误码
  */
 ZC_API zc_result_t zc_init(
-    const zc_config_t* config);
+    const zc_config_t* config
+);
 
 /**
  * @brief 销毁ZeroCore引擎
@@ -210,7 +215,8 @@ ZC_API zc_result_t zc_init(
  * @return ZC_OK 或错误码
  */
 ZC_API zc_result_t zc_destroy(
-    bool force);
+    bool force
+);
 
 /**
  * @brief 软重启：重置状态机，不清空内存池
@@ -226,7 +232,8 @@ ZC_API zc_result_t zc_soft_restart(void);
  * @note 线程安全，支持热更新
  */
 ZC_API zc_result_t zc_update_config(
-    const zc_config_t* new_config);
+    const zc_config_t* new_config
+);
 
 /**
  * @brief 获取当前统计快照
@@ -234,7 +241,8 @@ ZC_API zc_result_t zc_update_config(
  * @note 线程安全，原子快照
  */
 ZC_API void zc_stats_snapshot(
-    zc_stats_t* out_stats);
+    zc_stats_t* out_stats
+);
 
 #ifdef ZC_ENABLE_SAFETY_CHECKS
 /**
@@ -243,7 +251,8 @@ ZC_API void zc_stats_snapshot(
  * @note 仅在DEBUG模式有效，需暂停引擎
  */
 ZC_API void zc_dump_pool(
-    FILE* fp);
+    FILE* fp
+);
 #endif
 
 /**
@@ -251,7 +260,8 @@ ZC_API void zc_dump_pool(
  * @param level 日志级别
  */
 ZC_API void zc_set_log_level(
-    zc_log_level_t level);
+    zc_log_level_t level
+);
 
 /**
  * @brief 注册钩子回调
@@ -264,7 +274,8 @@ ZC_API void zc_set_log_level(
 ZC_API zc_result_t zc_register_hook(
     zc_hook_event_t event,
     zc_hook_callback_t cb,
-    void* user_ctx);
+    void* user_ctx
+);
 
 /**
  * @brief 获取系统时间戳（纳秒，单调递增）
@@ -283,7 +294,8 @@ ZC_API zc_time_t zc_timestamp(void);
  */
 ZC_API zc_result_t zc_writer_register(
     const zc_thread_config_t* config,
-    zc_writer_id_t* out_writer_id);
+    zc_writer_id_t* out_writer_id
+);
 
 /**
  * @brief 注销写入者
@@ -292,7 +304,8 @@ ZC_API zc_result_t zc_writer_register(
  * @note 线程安全
  */
 ZC_API zc_result_t zc_writer_unregister(
-    zc_writer_id_t writer_id);
+    zc_writer_id_t writer_id
+);
 
 /**
  * @brief 获取空闲内存块
@@ -307,7 +320,8 @@ ZC_API zc_result_t zc_writer_acquire_block(
     zc_writer_id_t writer_id,
     size_t size,
     zc_block_handle_t* handle,
-    uint64_t timeout_ns);
+    uint64_t timeout_ns
+);
 
 /**
  * @brief 提交写入完成
@@ -316,7 +330,8 @@ ZC_API zc_result_t zc_writer_acquire_block(
  * @note 必须在acquire后调用，线程安全
  */
 ZC_API zc_result_t zc_writer_commit_block(
-    zc_block_handle_t* handle);
+    zc_block_handle_t* handle
+);
 
 /**
  * @brief 取消写入（释放块引用）
@@ -325,7 +340,8 @@ ZC_API zc_result_t zc_writer_commit_block(
  * @note 线程安全
  */
 ZC_API zc_result_t zc_writer_cancel_block(
-    zc_block_handle_t* handle);
+    zc_block_handle_t* handle
+);
 
 /**
  * @brief 发送消息
@@ -339,7 +355,8 @@ ZC_API zc_result_t zc_writer_send_message(
     zc_writer_id_t writer_id,
     zc_message_type_t type,
     uint16_t length,
-    const void* msg);
+    const void* msg
+);
 
 /**
  * @brief 检查消息
@@ -353,14 +370,16 @@ ZC_API zc_result_t zc_writer_check_message(
     zc_writer_id_t writer_id,
     zc_message_type_t type,
     uint16_t length,
-    const void* payload);
+    const void* payload
+);
 
 /**
  * @brief 发送心跳
  * @param writer_id 写入者ID
  */
 ZC_API void zc_writer_send_heartbeat(
-    zc_writer_id_t writer_id);
+    zc_writer_id_t writer_id
+);
 
 /* ======================== 读取者接口 ======================== */
 
@@ -373,7 +392,8 @@ ZC_API void zc_writer_send_heartbeat(
  */
 ZC_API zc_result_t zc_reader_register(
     zc_writer_id_t subscribing_writer,
-    zc_reader_id_t* out_reader_id);
+    zc_reader_id_t* out_reader_id
+);
 
 /**
  * @brief 注销读取者
@@ -382,7 +402,8 @@ ZC_API zc_result_t zc_reader_register(
  * @note 线程安全
  */
 ZC_API zc_result_t zc_reader_unregister(
-    zc_reader_id_t reader_id);
+    zc_reader_id_t reader_id
+);
 
 /**
  * @brief 获取一个可读块
@@ -397,7 +418,8 @@ ZC_API zc_result_t zc_reader_poll_block(
     zc_reader_id_t reader_id,
     size_t size,
     zc_block_handle_t* handle,
-    uint64_t timeout_ns);
+    uint64_t timeout_ns
+);
 
 /**
  * @brief 释放读取块引用
@@ -408,7 +430,8 @@ ZC_API zc_result_t zc_reader_poll_block(
  */
 ZC_API zc_result_t zc_reader_release_block(
     zc_reader_id_t reader_id,
-    zc_block_handle_t* handle);
+    zc_block_handle_t* handle
+);
 
 /**
  * @brief 发送消息
@@ -422,7 +445,8 @@ ZC_API zc_result_t zc_reader_send_message(
     zc_writer_id_t writer_id,
     zc_message_type_t type,
     uint16_t length,
-    const void* msg);
+    const void* msg
+);
 
 /**
  * @brief 检查消息
@@ -436,7 +460,8 @@ ZC_API zc_result_t zc_reader_check_message(
     zc_writer_id_t writer_id,
     zc_message_type_t type,
     uint16_t length,
-    const void* payload);
+    const void* payload
+);
 
 /**
  * @brief 发送心跳
@@ -444,7 +469,8 @@ ZC_API zc_result_t zc_reader_check_message(
  * @note 线程安全
  */
 ZC_API void zc_reader_send_heartbeat(
-    zc_reader_id_t reader_id);
+    zc_reader_id_t reader_id
+);
 
 /* ======================== 块句柄访问器 ======================== */
 
@@ -454,7 +480,8 @@ ZC_API void zc_reader_send_heartbeat(
  * @return 大小（字节）
  */
 ZC_API size_t zc_block_size(
-    zc_block_handle_t* handle);
+    zc_block_handle_t* handle
+);
 
 /**
  * @brief 获取时间戳（纳秒）
@@ -462,7 +489,8 @@ ZC_API size_t zc_block_size(
  * @return 时间戳
  */
 ZC_API uint64_t zc_block_timestamp(
-    zc_block_handle_t* handle);
+    zc_block_handle_t* handle
+);
 
 #ifdef __cplusplus
 }
