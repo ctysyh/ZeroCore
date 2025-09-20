@@ -278,8 +278,6 @@ typedef struct zc_reader_workspace {
     uint64_t read_count;
     uint64_t message_count;
 } zc_reader_workspace_t;
-
-#define READER_WS_SIZE ( )
 ```
 
 ### 3.3 查找未读块（尽力 FIFO）

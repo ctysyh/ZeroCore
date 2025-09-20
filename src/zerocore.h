@@ -32,8 +32,12 @@ extern "C" {
 #define ZC_MAX_WRITERS 32
 #endif
 
-#ifndef ZC_MAX_READERS_PER_WRITER
-#define ZC_MAX_READERS_PER_WRITER 32
+#ifndef ZC_MAX_READERS_PER
+#define ZC_MAX_READERS_PER 32
+#endif
+
+#ifndef ZC_MAX_READERS_TOTAL
+#define ZC_MAX_READERS_TOTAL 1024
 #endif
 
 // 默认关闭安全检查（生产环境），调试时启用
