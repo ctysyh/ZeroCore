@@ -30,7 +30,7 @@ zc_internal_result_t zc_segment_lock(zc_segment_t* seg)
     // 遍历页，将状态改成BUSY
     for (uint64_t i = 0; i < seg->content_page_count; i++) {
         zc_page_t* page = seg->pages + i;
-        page->header.state = ZC_PAGE_BUSY;
+        page->header.state = ZC_PAGE_STATE_BUSY;
     }
 
     // 遍历页，等待其状态变为LOCK
@@ -57,4 +57,6 @@ zc_internal_result_t zc_segment_release(zc_segment_t* seg)
 
     // 将seg改成NULL
     seg = NULL;
+
+    return ZC_INTERNAL_OK;
 }

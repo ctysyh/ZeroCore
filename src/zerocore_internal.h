@@ -46,16 +46,20 @@ extern "C" {
 
 typedef uint32_t zc_writer_id_t;
 typedef uint64_t zc_reader_id_t;
+typedef uint64_t zc_time_t;
 
 typedef enum zc_internal_result {
-    ZC_INTERNAL_OK             = 0,
-    ZC_INTERNAL_GENERAL_ERROR  = 1,
+    ZC_INTERNAL_OK                    = 0,
+    ZC_INTERNAL_GENERAL_ERROR         = 1,
 
-    ZC_INTERNAL_PARAM_ERROR    = 10,
-    ZC_INTERNAL_PARAM_PTRNULL  = 11,
+    ZC_INTERNAL_PARAM_ERROR           = 10,
+    ZC_INTERNAL_PARAM_PTRNULL         = 11,
 
-    ZC_INTERNAL_RUN_ERROR      = 20,
-    ZC_INTERNAL_RUN_PTRNULL    = 21,
+    ZC_INTERNAL_RUN_ERROR             = 20,
+    ZC_INTERNAL_RUN_PTRNULL           = 21,
+    ZC_INTERNAL_RUN_BLOCK_UNEXPECTED  = 22,
+    ZC_INTERNAL_RUN_BLOCK_UNRELEASED   = 23,
+    ZC_INTERNAL_RUN_BLOCK_WRITER_CONFLICT = 24,
 } zc_internal_result_t;
 
 #ifdef __cplusplus

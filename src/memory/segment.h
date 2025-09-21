@@ -1,11 +1,6 @@
 /*
 */
-
-#ifndef SEGMENT_H
-#define SEGMENT_H
-
-#define ZC_VERSION_MAJOR 1
-#define ZC_VERSION_MINOR 4
+#pragma once
 
 #include "zerocore_internal.h"
 #include "page.h"
@@ -68,5 +63,3 @@ zc_internal_result_t zc_segment_release(
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* SEGMENT_H */

@@ -47,7 +47,7 @@ void test_zc_segment_lock() {
     // 检查所有页面是否都被标记为BUSY
     for (uint64_t i = 0; i < seg->content_page_count; i++) {
         zc_page_t* page = seg->pages + i;
-        assert(page->header.state == ZC_PAGE_BUSY);
+        assert(page->header.state == ZC_PAGE_STATE_BUSY);
     }
     printf("  Passed segment lock test\n");
 
