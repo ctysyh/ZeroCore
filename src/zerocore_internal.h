@@ -62,10 +62,13 @@ typedef enum zc_internal_result {
     ZC_INTERNAL_TYPE_ERROR                = 30,
     ZC_INTERNAL_TYPE_ILLEGAL_DESC         = 31,
 
-    ZC_INTERNAL_BLOCK_ERROR               = 40,
-    ZC_INTERNAL_BLOCK_UNEXPECTED          = 41,
-    ZC_INTERNAL_BLOCK_UNRELEASED          = 42,
-    ZC_INTERNAL_BLOCK_WRITER_CONFLICT     = 43,
+    ZC_INTERNAL_ZORA_ERROR                = 40,
+    ZC_INTERNAL_ZORA_UNEXPECTVERSION      = 41,
+
+    ZC_INTERNAL_BLOCK_ERROR               = 50,
+    ZC_INTERNAL_BLOCK_UNEXPECTED          = 51,
+    ZC_INTERNAL_BLOCK_UNRELEASED          = 52,
+    ZC_INTERNAL_BLOCK_WRITER_CONFLICT     = 53,
 } zc_internal_result_t;
 
 #ifdef __cplusplus

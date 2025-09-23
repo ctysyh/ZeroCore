@@ -2,10 +2,10 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -I../src -I../src/memory
 
 # 测试程序目标（无后缀）
-TEST_TARGET = segment block type_descriptor
+TEST_TARGET = segment block type_descriptor handle
 
 # 内存模块源码
-MEMORY_SOURCES = ../src/memory/segment.c ../src/memory/block.c ../src/type/type_descriptor.c
+MEMORY_SOURCES = ../src/memory/segment.c ../src/memory/block.c ../src/type/type_descriptor.c ../src/zora/handle.c
 
 # 默认目标
 all: $(TEST_TARGET)
