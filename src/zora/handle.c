@@ -1,5 +1,8 @@
 #include "handle.h"
 
+/**
+ * 
+ */
 zc_internal_result_t zora_encrypt_handle(void* block_header_ptr,
     uint64_t key, uint8_t version, zc_handle_t* out_handle)
 {
@@ -10,6 +13,9 @@ zc_internal_result_t zora_encrypt_handle(void* block_header_ptr,
     return ZC_INTERNAL_OK;
 }
 
+/**
+ * 
+ */
 zc_internal_result_t zora_decrypt_handle(zc_handle_t handle, uint64_t key,
     uint8_t expect_version, void** out_block_header_ptr)
 {

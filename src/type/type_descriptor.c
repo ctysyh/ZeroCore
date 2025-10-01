@@ -6,13 +6,13 @@
  * @param desc 类型描述符
  * @param out_desc_len 类型描述符长度
  */
-zc_internal_result_t get_type_descriptor_length(
-    const uint8_t* desc, size_t* out_desc_len)
+zc_internal_result_t zc_get_type_descriptor_length(
+    const uint8_t* desc, uint64_t* out_desc_len)
 {
     if (!desc) return ZC_INTERNAL_TYPE_ILLEGAL_DESC;
 
     uint8_t type_tag = desc[0];
-    size_t len = 1; // 至少包含tag本身
+    uint64_t len = 1; // 至少包含tag本身
 
     switch (type_tag) {
         case ELEMENT_TYPE_END:
@@ -28,10 +28,10 @@ zc_internal_result_t get_type_descriptor_length(
         case ELEMENT_TYPE_U8:
         case ELEMENT_TYPE_VAR:
         case ELEMENT_TYPE_INTERNAL:
-        case ELEMENT_TYPE_END_MODIFIED_SEPARATOR:
-        case ELEMENT_TYPE_END_MODIFIED_PREFIX:
-        case ELEMENT_TYPE_I1_MODIFIED_SIGNEDASCII:
-        case ELEMENT_TYPE_I1_MODIFIED_UNSIGNEDASCII:
+        case ELEMENT_TYPE_SEPARATOR:
+        case ELEMENT_TYPE_PREFIX:
+        case ELEMENT_TYPE_SIGNEDASCII:
+        case ELEMENT_TYPE_UNSIGNEDASCII:
         {
             // 这些类型只有tag，没有附加tokens
             break;
@@ -42,7 +42,7 @@ zc_internal_result_t get_type_descriptor_length(
         case ELEMENT_TYPE_R8:
         case ELEMENT_TYPE_I:
         case ELEMENT_TYPE_U:
-        case ELEMENT_TYPE_R8_MODIFIED_FIXEDPOINT:
+        case ELEMENT_TYPE_FIXEDPOINT:
         {
             len += 1;
             break;
@@ -55,9 +55,8 @@ zc_internal_result_t get_type_descriptor_length(
         }
 
         case ELEMENT_TYPE_PTR:
-        case ELEMENT_TYPE_END_MODIFIED_PAGEBREAK:
         case ELEMENT_TYPE_OBJECT:
-        case ELEMENT_TYPE_OBJECT_MODIFIED_RAWBITS:
+        case ELEMENT_TYPE_RAWBITS:
         {
             len += 8;
             break;
@@ -77,8 +76,8 @@ zc_internal_result_t get_type_descriptor_length(
 
             for (uint16_t i = 0; i < field_count; i++)
             {
-                size_t field_len;
-                int32_t flag = get_type_descriptor_length(desc + len, &field_len);
+                uint64_t field_len;
+                int32_t flag = zc_get_type_descriptor_length(desc + len, &field_len);
                 if (flag != ZC_INTERNAL_OK) return flag;
                 len += field_len;
             }
@@ -95,8 +94,8 @@ zc_internal_result_t get_type_descriptor_length(
             // N个字段信息：类型描述符 + 8字节偏移量 + 8字节大小
             for (uint8_t i = 0; i < field_count; i++)
             {
-                size_t field_type_len;
-                int32_t flag = get_type_descriptor_length(desc + len, &field_type_len);
+                uint64_t field_type_len;
+                int32_t flag = zc_get_type_descriptor_length(desc + len, &field_type_len);
                 if (flag != ZC_INTERNAL_OK) return flag;
                 len += field_type_len + (8 + 8);
             }
@@ -110,8 +109,8 @@ zc_internal_result_t get_type_descriptor_length(
             len += 1; // 维度数量
 
             // 元素类型描述符（递归）
-            size_t elem_type_len;
-            int32_t flag = get_type_descriptor_length(desc + len, &elem_type_len);
+            uint64_t elem_type_len;
+            int32_t flag = zc_get_type_descriptor_length(desc + len, &elem_type_len);
             if (flag != ZC_INTERNAL_OK) return flag;
             len += elem_type_len;
 
@@ -124,8 +123,8 @@ zc_internal_result_t get_type_descriptor_length(
         {
             // 元素类型描述符 + 4字节元素数量
             // 元素类型描述符（递归）
-            size_t elem_type_len;
-            int32_t flag = get_type_descriptor_length(desc + 1, &elem_type_len);
+            uint64_t elem_type_len;
+            int32_t flag = zc_get_type_descriptor_length(desc + 1, &elem_type_len);
             if (flag != ZC_INTERNAL_OK) return flag;
             len += elem_type_len + 4;
             break;
@@ -147,8 +146,8 @@ zc_internal_result_t get_type_descriptor_length(
  * @param desc_len 类型描述符长度
  * @param out_size 变量长度
  */
-zc_internal_result_t zc_type_desc_get_size(const uint8_t* desc,
-    size_t desc_len, size_t* out_obj_size)
+zc_internal_result_t zc_type_desc_get_obj_size(const uint8_t* desc,
+    uint64_t desc_len, uint64_t* out_obj_size)
 {
     // 检查参数
     if (!desc || !out_obj_size || desc_len == 0) return ZC_INTERNAL_PARAM_PTRNULL;
@@ -287,7 +286,7 @@ zc_internal_result_t zc_type_desc_get_size(const uint8_t* desc,
             {
                 uint8_t struct_alignment = desc[1];  // 结构体指定的对齐宽度 (0表示packed)
                 uint16_t field_count = *((uint16_t*)(desc + 2)); // 字段数量
-                size_t current_offset = 4; // tag(1) + alignment(1) + field_count(2)
+                uint64_t current_offset = 4; // tag(1) + alignment(1) + field_count(2)
 
                 // 如果字段数量为0，返回大小1（空结构体大小为1）
                 if (field_count == 0)
@@ -297,16 +296,16 @@ zc_internal_result_t zc_type_desc_get_size(const uint8_t* desc,
                 }
                 
                 // 分配空间存储字段大小
-                size_t* field_sizes = (size_t*)malloc(field_count * sizeof(size_t));
+                uint64_t* field_sizes = (uint64_t*)malloc(field_count * sizeof(uint64_t));
                 if (!field_sizes) return ZC_INTERNAL_RUN_NOT_INITIALIZED;
 
                 // 提取所有字段的大小
                 for (uint16_t i = 0; i < field_count; i++)
                 {
                     // 确定字段的描述符长度
-                    size_t field_len;
-                    size_t field_size;
-                    int32_t flag = get_type_descriptor_length(desc + current_offset, &field_len);
+                    uint64_t field_len;
+                    uint64_t field_size;
+                    int32_t flag = zc_get_type_descriptor_length(desc + current_offset, &field_len);
                     if (flag != ZC_INTERNAL_OK)
                     {
                         free(field_sizes);
@@ -327,7 +326,7 @@ zc_internal_result_t zc_type_desc_get_size(const uint8_t* desc,
                 // 如果是 packed 模式
                 if (struct_alignment == 0)
                 {
-                    size_t total = 0;
+                    uint64_t total = 0;
                     for (uint16_t i = 0; i < field_count; i++)
                     {
                         total += field_sizes[i];
@@ -344,22 +343,22 @@ zc_internal_result_t zc_type_desc_get_size(const uint8_t* desc,
                     return ZC_INTERNAL_PARAM_ERROR;
                 }
 
-                size_t offset = 0; // 当前偏移
+                uint64_t offset = 0; // 当前偏移
 
                 for (uint16_t i = 0; i < field_count; i++)
                 {
-                    size_t field_size = field_sizes[i];
+                    uint64_t field_size = field_sizes[i];
                     // 字段对齐要求：不能超过结构体对齐，也不能超过字段自身大小（我们假设字段自然对齐=size）
-                    size_t field_align = (field_size < struct_alignment) ? field_size : struct_alignment;
+                    uint64_t field_align = (field_size < struct_alignment) ? field_size : struct_alignment;
 
                     // 计算为了对齐到 field_align 需要填充多少字节
-                    size_t padding = (field_align - (offset % field_align)) % field_align;
+                    uint64_t padding = (field_align - (offset % field_align)) % field_align;
                     offset += padding;          // 加上填充
                     offset += field_size;       // 加上字段本身
                 }
 
                 // 最后整体结构体大小要对齐到 struct_alignment
-                size_t final_padding = (struct_alignment - (offset % struct_alignment)) % struct_alignment;
+                uint64_t final_padding = (struct_alignment - (offset % struct_alignment)) % struct_alignment;
                 offset += final_padding;
 
                 free(field_sizes);
@@ -382,15 +381,15 @@ zc_internal_result_t zc_type_desc_get_size(const uint8_t* desc,
             {
                 uint8_t field_count = desc[1];     // 内联字段数量 N
                 uint8_t header_size = desc[2];     // Header 大小 w
-                size_t offset = 3 + header_size;   // 跳过 tag(1) + N(1) + w(1) + header(w)
-                size_t total_size = 0;
+                uint64_t offset = 3 + header_size;   // 跳过 tag(1) + N(1) + w(1) + header(w)
+                uint64_t total_size = 0;
                 
                 // 遍历所有字段信息
                 for (uint8_t i = 0; i < field_count; i++)
                 {
                     // 需要跳过字段类型描述符（长度不定）
-                    size_t field_type_len;
-                    int32_t flag = get_type_descriptor_length(desc + offset, &field_type_len);
+                    uint64_t field_type_len;
+                    int32_t flag = zc_get_type_descriptor_length(desc + offset, &field_type_len);
                     if (flag != ZC_INTERNAL_OK) return flag;
                     
                     offset += field_type_len;      // 跳过字段类型描述符
@@ -435,15 +434,15 @@ zc_internal_result_t zc_type_desc_get_size(const uint8_t* desc,
             if (desc_len >= 3)
             {
                 uint8_t dimensions = desc[1];  // 维度数量 R
-                size_t offset = 2;             // 当前偏移量，从第3个字节开始
+                uint64_t offset = 2;             // 当前偏移量，从第3个字节开始
                 
                 // 获取元素类型描述符的长度
-                size_t elem_desc_len;
-                zc_internal_result_t result = get_type_descriptor_length(desc + offset, &elem_desc_len);
+                uint64_t elem_desc_len;
+                zc_internal_result_t result = zc_get_type_descriptor_length(desc + offset, &elem_desc_len);
                 if (result != ZC_INTERNAL_OK) return result;
 
                 // 获取单个元素宽度
-                size_t single_elem_size = 0;
+                uint64_t single_elem_size = 0;
                 result = zc_type_desc_get_size(desc + offset, elem_desc_len, &single_elem_size);
                 if (result != ZC_INTERNAL_OK) return result;
 
@@ -455,7 +454,7 @@ zc_internal_result_t zc_type_desc_get_size(const uint8_t* desc,
                 if (desc_len < offset + dimensions * 16) return ZC_INTERNAL_TYPE_ILLEGAL_DESC;
                 
                 // 计算数组总大小
-                size_t total_count = 1;  // 初始化为1，然后累乘各维度长度
+                uint64_t total_count = 1;  // 初始化为1，然后累乘各维度长度
                 for (uint8_t i = 0; i < dimensions; i++)
                 {
                     // 从 desc[offset + i*16 + 8] 读取维度长度 (跳过8字节的下界)
@@ -509,12 +508,12 @@ zc_internal_result_t zc_type_desc_get_size(const uint8_t* desc,
         {
             // 语义：单维度零基数组，宽度动态
             // 获取元素类型描述符的长度
-            size_t elem_desc_len;
-            zc_internal_result_t result = get_type_descriptor_length(desc + 1, &elem_desc_len);
+            uint64_t elem_desc_len;
+            zc_internal_result_t result = zc_get_type_descriptor_length(desc + 1, &elem_desc_len);
             if (result != ZC_INTERNAL_OK) return result;
 
             // 获取单个元素宽度
-            size_t single_elem_size = 0;
+            uint64_t single_elem_size = 0;
             result = zc_type_desc_get_size(desc + 1, elem_desc_len, &single_elem_size);
             if (result != ZC_INTERNAL_OK) return result;
 

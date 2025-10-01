@@ -1,5 +1,7 @@
 # ZeroCore Internal 设计文档（v1.4-editing）
 
+> current version: 1.4.4
+
 ---
 
 ## 目录
@@ -10,11 +12,17 @@
   - [一、共享结构](#一共享结构)
     - [1.1 内存池结构](#11-内存池结构)
     - [1.2 内存段](#12-内存段)
-    - [1.3 内存页](#13-内存页)
       - [数据结构](#数据结构)
+      - [内存段状态](#内存段状态)
+      - [内存段的创建](#内存段的创建)
+      - [内存段的锁定](#内存段的锁定)
+      - [内存段的释放](#内存段的释放)
+    - [1.3 内存页](#13-内存页)
+      - [数据结构](#数据结构-1)
+      - [内存页状态](#内存页状态)
       - [管理逻辑](#管理逻辑)
     - [1.4 内存块](#14-内存块)
-      - [数据结构](#数据结构-1)
+      - [数据结构](#数据结构-2)
       - [Header](#header)
       - [块状态机](#块状态机)
     - [1.5 注册表](#15-注册表)
@@ -23,7 +31,7 @@
     - [2.1 `zc_handle_t` 定义](#21-zc_handle_t-定义)
     - [2.2 `zora_thread_cache_t` 数据结构](#22-zora_thread_cache_t-数据结构)
     - [2.3 线程缓存全局数组](#23-线程缓存全局数组)
-      - [数据结构：](#数据结构-2)
+      - [数据结构：](#数据结构-3)
       - [注册与注销：](#注册与注销)
       - [分配逻辑（伪代码）：](#分配逻辑伪代码)
       - [数据使用](#数据使用)
@@ -40,7 +48,7 @@
     - [4.4 提交与取消](#44-提交与取消)
   - [五、读取者](#五读取者)
     - [5.1 注册与 ID 规则](#51-注册与-id-规则)
-    - [5.2 写入者工作空间](#52-写入者工作空间)
+    - [5.2 读取者工作空间](#52-读取者工作空间)
     - [5.3 查找未读块（尽力 FIFO）](#53-查找未读块尽力-fifo)
     - [5.4 释放引用](#54-释放引用)
   - [六、清理者及其内部协作](#六清理者及其内部协作)
@@ -89,7 +97,72 @@ typedef struct {
 
 ### 1.2 内存段
 
-<TODO> **包括元数据、运行时新增和释放、排序优化、NUMA/跨节点感知优化等**
+#### 数据结构
+
+```c
+typedef struct zc_segment {
+    uint64_t seq;
+
+    uint64_t content_page_count;
+    zc_page_t* pages;
+    zc_page_stats_t* pages_stats;
+
+    zc_segment_stats_t stats;
+
+    zc_segment_hardwork_info_t hardwork_info;
+} zc_segment_t;
+
+typedef struct zc_segment_stats {
+    uint32_t state;
+    float    usage_rate;
+    float    block_avg_length;
+    float    block_avg_reserve_time;
+    int32_t  writer_access_count[ZC_MAX_WRITERS];
+} zc_segment_stats_t;
+
+typedef struct zc_segment_hardwork_info {
+
+} zc_segment_hardwork_info_t;
+
+typedef struct zc_page_stats {
+
+} zc_page_stats_t;
+```
+
+#### 内存段状态
+
+```c
+typedef enum zc_segment_state {
+    ZC_SEGMENT_IDLE      = 0,
+    ZC_SEGMENT_LOCK      = 1,
+    ZC_SEGMENT_BUSY      = 2,
+    ZC_SEGMENT_ERROR     = 3,
+} zc_segment_state_t;
+```
+
+#### 内存段的创建
+
+```c
+zc_internal_result_t zc_segment_create(
+    zc_segment_t* seg
+);
+```
+
+#### 内存段的锁定
+
+```c
+zc_internal_result_t zc_segment_lock(
+    zc_segment_t* seg
+);
+```
+
+#### 内存段的释放
+
+```c
+zc_internal_result_t zc_segment_release(
+    zc_segment_t* seg
+);
+```
 
 ### 1.3 内存页
 
@@ -108,6 +181,23 @@ typedef struct zc_page_tail {
 ```
 
 - 整体大小为 512 字节，头尾之间的主要部分为数据承载区。
+
+#### 内存页状态
+
+```c
+typedef enum zc_page_state {
+    ZC_PAGE_IDLE      = 0,
+    ZC_PAGE_AS_HEAD   = 1,
+    ZC_PAGE_AS_MID    = 2,
+    ZC_PAGE_AS_DTTA   = 3,
+
+    ZC_PAGE_LOCK      = 5,
+    ZC_PAGE_BUSY      = 6,
+    ZC_PAGE_ERROR     = 7
+} zc_page_state_t;
+```
+
+- 内存页状态是实现内存块识别和管理的依据。
 
 #### 管理逻辑
 
@@ -128,12 +218,12 @@ typedef struct zc_page_tail {
 
 ```c
 typedef struct zc_block_header {
-    _Atomic uint16_t  state;           // FREE=0, USING=1, CLEAN=2
-    uint16_t          reserved_flags;  // 未来扩展位
-    uint32_t          writer_id;       // 写入者 ID
-    zc_time_t         timestamp;       // 写入时间戳
-    uint64_t          lut_offset;      // DTTA 查找表偏移量
-    uint64_t          lut_entry_count; // DTTA 条目数量
+    _Atomic uint16_t  state;            // FREE=0, USING=1, CLEAN=2
+    uint16_t          reserved_flags;   // 未来扩展位
+    zc_writer_id_t    writer_id;        // 写入者 ID
+    zc_time_t         timestamp;        // 写入时间戳
+    uint64_t          cover_page_count; // 块跨越的页数量
+    uint64_t          lut_offset;       // DTTA 查找表偏移量
 
     // === 并行引用位图===
     bool      writer_ref[ZC_MAX_WRITERS];         // 写入者实时引用
@@ -309,6 +399,12 @@ static inline zora_thread_cache_t* zora_get_cache_reader(zc_reader_id_t id)
 
 - 位置：紧随 `UserData` 区域之后。
 - 结构：由元数据查询表（LUT）和类型描述符串组成。
+    - LUT 表头：
+      ```c
+      typedef struct zc_dtt_lut_header {
+          uint64_t entry_count;
+      } zc_dtt_lut_header_t;
+      ```
     - LUT 表项：
       ```c
       typedef struct zc_dtt_lut_entry {
@@ -437,7 +533,7 @@ ZC_API zc_result_t zc_reader_register(
 
 - ID 高 32 位 = `writer_id`，低 32 位 = 自增序号 → 至多 32 读者 per 写入者。
 
-### 5.2 写入者工作空间
+### 5.2 读取者工作空间
 
 ```c
 typedef struct zc_reader_workspace {

@@ -102,7 +102,7 @@
   - 无
 - 可用修饰：
   - 0x44 — 执行符号扩展的ASCII值
-
+unsigned
 #### 0x05 — `ELEMENT_TYPE_U1`
 - 语义：无符号 8 位整数
 - 宽度：`1B`
@@ -177,7 +177,7 @@
 - 语义：指向内存块内某个有类型变量起始偏移的偏移指针
 - 宽度：固定 `8B`
 - 附加tokens：
-  - `1B (+ ?)` — 目标数据的类型描述符（必须是有效 `CorElementType`）
+  - `1B` — 目标数据的类型描述符（必须是有效 `CorElementType`）
   - `8B` — 目标数据的字节长度
 
 #### 0x11 — `ELEMENT_TYPE_VALUETYPE`
@@ -234,7 +234,7 @@
 - 附加tokens：
   - `8B` — 数据宽度（字节）
 - 可用修饰：
-  - 0x5C — 无类型位流（raw bits）
+  - 0x5C — 无类型位流（raw bits），附加tokens为8字节数据宽度（字节）
 
 #### 0x1D — `ELEMENT_TYPE_SZARRAY`
 - 语义：单维度零基数组

@@ -10,35 +10,39 @@
 extern "C" {
 #endif
 
-typedef struct zc_page_header {
+typedef struct zc_page_header
+{
     uint64_t  line_seq : 61;    // 行序号
     uint64_t  state    : 3;     // 状态标识
     uint64_t  prev_page_addr;   // 前一页物理地址
 } zc_page_header_t;
 #ifndef ZC_PAGE_HEADER_SIZE
-#define ZC_PAGE_HEADER_SIZE 16
+#define ZC_PAGE_HEADER_SIZE sizeof(zc_page_header_t)
 #endif
 
-typedef struct zc_page_tail {
+typedef struct zc_page_tail
+{
     uint64_t  next_page_addr;   // 下一页物理地址
 } zc_page_tail_t;
 #ifndef ZC_PAGE_TAIL_SIZE
-#define ZC_PAGE_TAIL_SIZE 8
+#define ZC_PAGE_TAIL_SIZE sizeof(zc_page_tail_t)
 #endif
 
-typedef struct zc_page {
-    zc_page_header_t header;
-    char             data[488];
-    zc_page_tail_t   tail;
-} zc_page_t;
-#ifndef ZC_PAGE_SIZE
-#define ZC_PAGE_SIZE 512
-#endif
 #ifndef ZC_PAGE_DATA_SIZE
 #define ZC_PAGE_DATA_SIZE 488
 #endif
+typedef struct zc_page
+{
+    zc_page_header_t header;
+    char             data[ZC_PAGE_DATA_SIZE];
+    zc_page_tail_t   tail;
+} zc_page_t;
+#ifndef ZC_PAGE_SIZE
+#define ZC_PAGE_SIZE sizeof(zc_page_t)
+#endif
 
-typedef enum zc_page_state {
+typedef enum zc_page_state
+{
     ZC_PAGE_STATE_IDLE      = 0,
     ZC_PAGE_STATE_AS_HEAD   = 1,
     ZC_PAGE_STATE_AS_MID    = 2,

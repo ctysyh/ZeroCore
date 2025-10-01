@@ -1,5 +1,6 @@
 #include "block.h"
 #include "page.h"
+#include "dtta.h"
 #include <string.h>
 
 /**
@@ -7,13 +8,13 @@
  * 
  */
 zc_internal_result_t zc_acquire_block_for_writing(zc_block_header_t* block,
-    size_t size, zc_writer_id_t writer_id)
+    uint64_t acquire_size, zc_writer_id_t writer_id)
 {
     // 假设传入的参数都是有效的
 
     if (block->state != ZC_BLOCK_STATE_FREE) return ZC_INTERNAL_BLOCK_UNEXPECTED;
 
-    uint64_t need_page_count = (ZC_BLOCK_HEADER_SIZE + size + (size / 10)) / ZC_PAGE_DATA_SIZE + 1;
+    uint64_t need_page_count = (ZC_BLOCK_HEADER_SIZE + acquire_size + (acquire_size / 10)) / ZC_PAGE_DATA_SIZE + 1;
     if (need_page_count > block->cover_page_count) return ZC_INTERNAL_BLOCK_UNEXPECTED;
 
     int32_t flag;
@@ -28,7 +29,7 @@ zc_internal_result_t zc_acquire_block_for_writing(zc_block_header_t* block,
     }
 
     block->writer_ref[writer_id] = true;
-    block->lut_offset = size + ZC_BLOCK_HEADER_SIZE;
+    block->lut_offset = acquire_size + ZC_BLOCK_HEADER_SIZE;
 
     // 暂时忽略与清理者的冲突
     // CAS block->state = ZC_BLOCK_STATE_FREE
@@ -48,16 +49,18 @@ zc_internal_result_t zc_acquire_block_for_writing(zc_block_header_t* block,
 
     if (need_page_count + 1 < block->cover_page_count)
     {
-        void* current_page = (void*)block - ZC_PAGE_HEADER_SIZE;
+        void* current_page = (char*)block - ZC_PAGE_HEADER_SIZE;
         zc_page_t* next_header_page = (zc_page_t*)current_page + need_page_count;
 
-        flag = zc_block_create_new_header(next_header_page->data, block->cover_page_count - need_page_count);
+        uint64_t new_block_page_count = block->cover_page_count - need_page_count;
+        flag = zc_block_create(next_header_page->data, new_block_page_count * (9 * ZC_PAGE_DATA_SIZE / 10), new_block_page_count);
         if (unlikely(flag != ZC_INTERNAL_OK))
         {
             // 不需要失败, 但是需要报告, 报告逻辑暂时忽略
         }
         else
         {
+            block->lut_offset = ZC_BLOCK_HEADER_SIZE + acquire_size;
             block->cover_page_count = need_page_count;
         }
     }
@@ -139,8 +142,8 @@ inline zc_internal_result_t zc_release_block_from_reading(zc_block_header_t* blo
 /**
  * 
  */
-zc_internal_result_t zc_block_create_new_header(void* block_start_ptr,
-    uint64_t page_count)
+zc_internal_result_t zc_block_create(void* block_start_ptr,
+    uint64_t userdate_size, uint64_t page_count)
 {
     // 假设传入的参数都是有效的
 
@@ -154,8 +157,13 @@ zc_internal_result_t zc_block_create_new_header(void* block_start_ptr,
 
     block->state = ZC_BLOCK_STATE_FREE;
     block->cover_page_count = page_count;
+    block->lut_offset = ZC_BLOCK_HEADER_SIZE + userdate_size;
 
     memset(block->writer_ref, 0, ZC_MAX_WRITERS + ZC_MAX_READERS_PER * 2);
+
+    zc_dtt_lut_header_t* lut_header = (zc_dtt_lut_header_t*)(block->lut_offset);
+    lut_header->entry_count = 0;
+    lut_header->lut_first_entry_offset = zc_block_ptr_to_offset(block, lut_header + 1);
 
     // 后续应改为 CAS
     start_page->header.state = ZC_PAGE_STATE_AS_HEAD;
@@ -167,12 +175,12 @@ zc_internal_result_t zc_block_create_new_header(void* block_start_ptr,
 /**
  * 
  */
-zc_internal_result_t zc_block_delete_header(zc_block_header_t* block,
+zc_internal_result_t zc_block_delete(zc_block_header_t* block,
     uint64_t* release_page_count, zc_writer_id_t* writer_id, zc_time_t* timestamp)
 {
     // 假设传入的参数都是有效的
 
-    void* _start_page = (void*)block - ZC_PAGE_HEADER_SIZE;
+    void* _start_page = (char*)block - ZC_PAGE_HEADER_SIZE;
     zc_page_t* start_page = (zc_page_t*)_start_page;
 
     // 后续应改为 CAS
@@ -187,4 +195,33 @@ zc_internal_result_t zc_block_delete_header(zc_block_header_t* block,
     for (i = 0; i < *release_page_count; i++) (start_page + i)->header.state = ZC_PAGE_STATE_IDLE;
 
     return ZC_INTERNAL_OK;
+}
+
+// 已检查，未测试
+inline void* zc_block_offset_to_ptr(zc_block_header_t* block, uint64_t offset)
+{
+    if (unlikely(offset >= block->cover_page_count * ZC_PAGE_DATA_SIZE))
+    {
+        return NULL; // out of block
+    }
+
+    uint64_t page_idx = offset / ZC_PAGE_DATA_SIZE;
+    zc_page_t* page;
+
+    if (likely(page_idx < ZC_BLOCK_MAX_CACHED_PAGES))
+    {
+        page = block->page_cache[page_idx];
+    }
+    else
+    {
+        page = block->page_cache[ZC_BLOCK_MAX_CACHED_PAGES - 1];
+        for (uint64_t i = ZC_BLOCK_MAX_CACHED_PAGES - 1; i < page_idx && page; i++)
+        {
+            page = page->tail.next_page_addr;
+        }
+    }
+
+    if (!page) return NULL;
+    uint64_t in_page = offset % ZC_PAGE_DATA_SIZE;
+    return (char*)page + ZC_PAGE_HEADER_SIZE + in_page;
 }
