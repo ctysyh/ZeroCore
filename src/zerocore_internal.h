@@ -51,6 +51,7 @@ typedef uint64_t zc_time_t;
 typedef enum zc_internal_result {
     ZC_INTERNAL_OK                        = 0,
     ZC_INTERNAL_GENERAL_ERROR             = 1,
+    ZC_INTERNAL_UNREALIZED                = 2,
 
     ZC_INTERNAL_PARAM_ERROR               = 10,
     ZC_INTERNAL_PARAM_PTRNULL             = 11,

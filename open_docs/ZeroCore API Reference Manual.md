@@ -35,8 +35,6 @@
       - [0x19 — `ELEMENT_TYPE_U`](#0x19--element_type_u)
       - [0x1C — `ELEMENT_TYPE_OBJECT`](#0x1c--element_type_object)
       - [0x1D — `ELEMENT_TYPE_SZARRAY`](#0x1d--element_type_szarray)
-      - [0x21 — `ELEMENT_TYPE_INTERNAL`](#0x21--element_type_internal)
-      - [修饰符说明](#修饰符说明)
     - [2.2 数据写入 API](#22-数据写入-api)
       - [Store API](#store-api)
       - [Copy API](#copy-api)
@@ -64,7 +62,8 @@
 ### 2.1 类型描述符
 
 - 所有类型描述符由 1 字节 Tag + 附加 tokens 构成。
-- 修饰符位（高2bit）用于语义扩展。
+- 派生符位（高第2位）用于从原类型派生出新类型。
+- 修饰符位（高第1位）保留。
 - 部分枚举值暂不启用，在下方省略。
 
 #### 0x00 — `ELEMENT_TYPE_END`
@@ -72,16 +71,23 @@
 - 宽度：无
 - 附加tokens：
   - 无
-- 可用修饰：
-  - 0x40 — 表示复杂类型间的分隔符
-  - 0x80 — 表示类型描述符的起始前缀符
-  - 0xC0 — 表示过长的类型流换页符，附加tokens为8字节下页地址
+- 派生：
+  - 0x40 — `ELEMENT_TYPE_SEPARATOR`
+    - 语义：复杂类型间的分隔符
+    - 宽度：无
+    - 附加tokens：
+      - 无
+  - 0x80 — `ELEMENT_TYPE_PREFIX`
+    - 语义：类型描述符的起始前缀符
+    - 宽度：无
+    - 附加tokens：
+      - 无
 
 #### 0x01 — `ELEMENT_TYPE_VOID`
 - 语义：无类型，用于方法返回或占位
 - 宽度：不定
 - 附加tokens：
-  - `1B` — 表示该空类型占位宽度
+  - `1B` — 表示该空类型占位宽度（字节，2 的指数表示值 +1，为 0 表示确实为 0）
 
 #### 0x02 — `ELEMENT_TYPE_BOOLEAN`
 - 语义：布尔值
@@ -100,16 +106,24 @@
 - 宽度：`1B`
 - 附加tokens：
   - 无
-- 可用修饰：
-  - 0x44 — 执行符号扩展的ASCII值
-unsigned
+- 派生：
+  - 0x44 — `ELEMENT_TYPE_SIGNEDASCII`
+    - 语义：执行符号扩展的 ASCII 值
+    - 宽度：`1B`
+    - 附加tokens：
+      - 无
+
 #### 0x05 — `ELEMENT_TYPE_U1`
 - 语义：无符号 8 位整数
 - 宽度：`1B`
 - 附加tokens：
   - 无
 - 可用修饰：
-  - 0x45 — 不执行符号扩展的ASCII值
+  - 0x45 — `ELEMENT_TYPE_ASCII`
+    - 语义：标准的/不执行符号扩展的 ASCII 值
+    - 宽度：`1B`
+    - 附加tokens：
+      - 无
 
 #### 0x06 — `ELEMENT_TYPE_I2`
 - 语义：有符号 16 位整数
@@ -152,53 +166,75 @@ unsigned
 - 宽度：不大于 `4B`
 - 附加tokens：
   - `1B` — 专属格式 Token（预留，后续定义FP16、FP8、FP4、NVFP4等）
+- 派生：
+  - 0x4C — `ELEMENT_TYPE_FLOATTENSOR`
+    - 语义：浮点张量
+    - 宽度：不定
+    - 附加tokens：
+      - `1B` — 专属格式 Token（预留）
+      - `2B` — 张量阶数 `O`
+      - `O × 2B` — 每阶维度数量 `D_i`
 
 #### 0x0D — `ELEMENT_TYPE_R8`
 - 语义：长浮点数
 - 宽度：不小于 `4B`
 - 附加tokens：
-  - `1B` — 专属格式 Token（预留，后续定义扩展精度、浮点张量等）
-- 可用修饰：
-  - 0x4D — 定点数，对应专属格式 Token
+  - `1B` — 专属格式 Token（预留，后续定义扩展精度等）
+- 派生：
+  - 0x4D — `ELEMENT_TYPE_FIXEDPOINT`
+    - 语义：定点数
+    - 宽度：不定
+    - 附加tokens：
+      - `1B` — 专属格式 Token（预留）
 
 #### 0x0E — `ELEMENT_TYPE_STRING`
 - 语义：不可变 Unicode 字符串（UTF-16LE）
 - 宽度：不定（由字符数量决定）
 - 附加tokens：
-  - `4B` — 字符数量（`Length`，最大 4,294,967,295 个 `CHAR`）
+  - `4B` — 字符数量
+- 派生：
+  - 0x4E — `ELEMENT_TYPE_ASCIISTRING`
+    - 语义：不可变 ASCII 字符串
+    - 宽度：不定（由字符数量决定）
+    - 附加tokens：
+      - `4B` — 字符数量
 
 #### 0x0F — `ELEMENT_TYPE_PTR`
 - 语义：指向内存块内其他位置的偏移指针
-- 宽度：固定 `8B`
+- 宽度：`8B`
 - 附加tokens：
   - `8B` — 指向的连续内存区域的字节长度
 
 #### 0x10 — `ELEMENT_TYPE_BYREF`
 - 语义：指向内存块内某个有类型变量起始偏移的偏移指针
-- 宽度：固定 `8B`
+- 宽度：`8B`
 - 附加tokens：
   - `1B` — 目标数据的类型描述符（必须是有效 `CorElementType`）
   - `8B` — 目标数据的字节长度
 
 #### 0x11 — `ELEMENT_TYPE_VALUETYPE`
-- 语义：固定布局的结构体，字段紧密排列
+- 语义：固定布局的结构体，允许静态嵌套
 - 宽度：不定（由字段布局决定）
 - 附加tokens：
-  - `1B` — 对齐宽度（0=无对齐/packed）
-  - `2B` — 字段数量 `N`（最大 65,535 个字段）
-  - `N × [TypeDescriptor]` — 按内存布局顺序排列的字段类型描述符（递归结构）
+  - `4B` — 描述符的附加tokens总长度（字节）
+  - `8B` — 对象总宽度（字节）
+  - `1B` — 对齐宽度（0=packed）
+  - `1B` — 字段数量 `N`
+  - `N × [TypeDescriptor]` — 按内存布局顺序排列的字段类型描述符
 
 #### 0x12 — `ELEMENT_TYPE_CLASS`
 - 语义：动态对象，支持复杂内联嵌套
-- 宽度：动态
+- 宽度：动态（允许成员的字段大小改变）
 - 附加tokens：
-  - `1B` — 内联字段数量 `N`
-  - `1B` — Header 大小 `w` （字节，0 表示无 Header）
+  - `4B` — 描述符的附加tokens总长度（字节）
+  - `8B` — 对象总宽度（字节）
+  - `4B` — 内联字段数量 `N`（最大 65,535 个字段）
+  - `2B` — Header 大小 `w` （字节，0 表示无 Header）
   - `wB` — Header
-  - `N ×` 以下结构：
-    - `1B (+ ?)` — 字段类型描述符
-    - `8B` — 字段偏移量（从 `CLASS` 起始地址算起）
-    - `8B` — 字段大小（字节）
+  - `N × 12B` — 查找表，结构如下：
+    - `8B` — 字段偏移量（从 `CLASS` 对象的起始地址算起）
+    - `4B` — 字段类型描述符偏移量（从 `CLASS` 的 TypeDescriptor 起始地址算起）
+  - `N × [TypeDescriptor]` — 字段类型描述符
 
 #### 0x13 — `ELEMENT_TYPE_VAR`
 - 语义：特指 `CorElementType` 枚举类型本身
@@ -210,8 +246,8 @@ unsigned
 - 语义：多维、非零基数组
 - 宽度：动态（由维度和元素数量决定）
 - 附加tokens：
+  - `[TypeDescriptor]` — 元素类型描述符
   - `1B` — 维度数量 `R`（最大 255）
-  - `[TypeDescriptor]` — 元素类型描述符（递归）
   - `R ×` 以下结构：
     - `8B` — 维度下界 `LowerBound`
     - `8B` — 维度长度 `Length`
@@ -220,37 +256,32 @@ unsigned
 - 语义：平台原生有符号长整型
 - 宽度：由写入者平台决定
 - 附加tokens：
-  - `1B` — 实际宽度（字节）
+  - `1B` — 实际宽度（字节，2的指数表示）
 
 #### 0x19 — `ELEMENT_TYPE_U`
 - 语义：平台原生无符号长整型或本地指针
 - 宽度：由写入者平台决定
 - 附加tokens：
-  - `1B` — 实际宽度（字节）
+  - `1B` — 实际宽度（字节，2的指数表示）
 
 #### 0x1C — `ELEMENT_TYPE_OBJECT`
 - 语义：未指定类型（泛型）
 - 宽度：不定
 - 附加tokens：
   - `8B` — 数据宽度（字节）
-- 可用修饰：
-  - 0x5C — 无类型位流（raw bits），附加tokens为8字节数据宽度（字节）
+- 派生：
+  - 0x5C — `ELEMENT_TYPE_RAWBITS`
+    - 语义：无类型位流
+    - 宽度：不定
+    - 附加tokens：
+      - `8B` — 数据宽度（字节）
 
 #### 0x1D — `ELEMENT_TYPE_SZARRAY`
 - 语义：单维度零基数组
 - 宽度：动态（由元素数量和类型决定）
 - 附加tokens：
   - `[TypeDescriptor]` — 元素类型描述符
-  - `4B` — 元素数量 `Length`
-
-#### 0x21 — `ELEMENT_TYPE_INTERNAL`
-- 语义：[类型描述符前缀]临时变量标记，其后紧跟所标记的变量类型描述符
-- 附加tokens：
-  - 无
-
-#### 修饰符说明
-
-- 修饰符不影响基础类型宽度和布局，仅添加语义标记。可用修饰符及含义均已在对应项目中列明。
+  - `4B` — 元素数量
 
 ### 2.2 数据写入 API
 
@@ -359,7 +390,7 @@ ZC_API zc_result_t zc_delete_byref(
 ### 2.3 数据读取 API
 
 - <TODO> **本小节的 API 写入者也应该能用，需要为写入者定义一套平行的数据读取 API。**
-
+ 
 #### Load API
 
 ```c
@@ -532,4 +563,89 @@ typedef enum {
     ZC_WARN_RESERVE_FAILED = 2,
     ZC_WARN_DTTA_FRAGMENTED = 3
 } zc_result_t;
+```
+
+
+附录
+1. 递归解析结构体总大小（旧实现）
+```c
+    uint8_t struct_alignment = desc[1];  // 结构体指定的对齐宽度 (0表示packed)
+    uint16_t field_count = *((uint16_t*)(desc + 2)); // 字段数量
+    uint64_t current_offset = 4; // tag(1) + alignment(1) + field_count(2)
+
+    // 如果字段数量为0，返回大小1（空结构体大小为1）
+    if (field_count == 0)
+    {
+        *out_obj_size = 1;
+        break;
+    }
+
+    // 分配空间存储字段大小
+    uint64_t* field_sizes = (uint64_t*)malloc(field_count * sizeof(uint64_t));
+    if (!field_sizes) return ZC_INTERNAL_RUN_NOT_INITIALIZED;
+
+    // 提取所有字段的大小
+    for (uint16_t i = 0; i < field_count; i++)
+    {
+        // 确定字段的描述符长度
+        uint64_t field_len;
+        uint64_t field_size;
+        int32_t flag = zc_get_type_descriptor_length(desc + current_offset, &field_len);
+        if (flag != ZC_INTERNAL_OK)
+        {
+            free(field_sizes);
+            return flag;
+        }
+
+        flag = zc_type_desc_get_size(desc + current_offset, field_len, &field_size);
+        if (flag != ZC_INTERNAL_OK)
+        {
+            free(field_sizes);
+            return flag;
+        }
+
+        field_sizes[i] = field_size;
+        current_offset += field_len;
+    }
+
+    // 如果是 packed 模式
+    if (struct_alignment == 0)
+    {
+        uint64_t total = 0;
+        for (uint16_t i = 0; i < field_count; i++)
+        {
+            total += field_sizes[i];
+        }
+        free(field_sizes);
+        *out_obj_size = total;
+        break;
+    }
+
+    // 检查struct_alignment是否为2的幂或者为0
+    if ((struct_alignment > 0) && ((struct_alignment & (struct_alignment - 1)) != 0))
+    {
+        free(field_sizes);
+        return ZC_INTERNAL_PARAM_ERROR;
+    }
+
+    uint64_t offset = 0; // 当前偏移
+
+    for (uint16_t i = 0; i < field_count; i++)
+    {
+        uint64_t field_size = field_sizes[i];
+        // 字段对齐要求：不能超过结构体对齐，也不能超过字段自身大小（我们假设字段自然对齐=size）
+        uint64_t field_align = (field_size < struct_alignment) ? field_size : struct_alignment;
+
+        // 计算为了对齐到 field_align 需要填充多少字节
+        uint64_t padding = (field_align - (offset % field_align)) % field_align;
+        offset += padding;          // 加上填充
+        offset += field_size;       // 加上字段本身
+    }
+
+    // 最后整体结构体大小要对齐到 struct_alignment
+    uint64_t final_padding = (struct_alignment - (offset % struct_alignment)) % struct_alignment;
+    offset += final_padding;
+
+    free(field_sizes);
+    *out_obj_size = offset;
 ```
